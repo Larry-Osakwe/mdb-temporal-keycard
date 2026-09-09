@@ -1,4 +1,4 @@
-"""One-shot Keycard zone provisioning for the demo (run by a signed-in human).
+"""One-shot Keycard zone provisioning for the demo, via `keycard agent api`.
 
 Creates, in the zone named by KEYCARD_PROVISION_ZONE_ID:
 
@@ -9,32 +9,35 @@ Creates, in the zone named by KEYCARD_PROVISION_ZONE_ID:
        KEYCARD_OPENAI_RESOURCE   -> vaulted OpenAI API key
   3. the three resources as dependencies of the application
 
-then prints the .env block to paste (client secret included once, never logged).
+Auth rides the signed-in Keycard CLI session (`keycard auth signin`); every
+call goes through `keycard agent api`, the CLI's authenticated Management API
+passthrough. Nothing here touches tokens directly.
 
-Auth: KEYCARD_ADMIN_TOKEN env var, or the signed-in Keycard CLI session token
-from the macOS keychain (a permission prompt may appear; that is this script
-asking, on your machine).
+Secrets come from MONGODB_URI / VOYAGE_API_KEY / OPENAI_API_KEY env vars. A
+missing value still creates the resource and dependency and only skips the
+vault write, so the skeleton can be provisioned before the secrets exist.
 
-Secrets: MONGODB_URI / VOYAGE_API_KEY / OPENAI_API_KEY env vars, or interactive
-prompts. A blank value skips that resource so you can provision in stages.
+The client credential is written straight into the repo's .env (created or
+appended, never printed). Re-runs are idempotent: existing application,
+resources, and dependencies are reused, and a credential is only minted when
+.env does not already carry one.
 
 Usage:  uv run python -m infra.provision_keycard
 """
 
 from __future__ import annotations
 
-import getpass
 import json
 import os
 import subprocess
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
+from pathlib import Path
 
-API_BASE = os.environ.get("KEYCARD_API_BASE", "https://api.keycard.ai")
 ZONE_ID = os.environ.get("KEYCARD_PROVISION_ZONE_ID", "bsq01zgq46reqv1l2fj7hgjhgt")
+ORG_ID = os.environ.get("KEYCARD_PROVISION_ORG_ID", "m4pm31dpupr5y8lm99n90n2xv9")
 APP_NAME = os.environ.get("KEYCARD_PROVISION_APP_NAME", "temporal-pipeline-worker")
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 RESOURCES = [
     # (env var for the secret value, resource identifier env, default identifier, name)
@@ -44,144 +47,140 @@ RESOURCES = [
 ]
 
 
-def admin_token() -> str:
-    tok = os.environ.get("KEYCARD_ADMIN_TOKEN", "")
-    if tok:
-        return tok
+def api(method: str, path: str, body: dict | None = None) -> dict:
+    cmd = ["keycard", "agent", "api", path, "-X", method, "--zone", ZONE_ID, "--org", ORG_ID]
+    if body is not None:
+        cmd += ["-d", json.dumps(body)]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    text = out.stdout.strip()
     try:
-        out = subprocess.run(
-            ["security", "find-generic-password", "-s", "Keycard CLI", "-w"],
-            capture_output=True, text=True, check=True,
-        )
-        return out.stdout.strip()
-    except Exception as e:
-        sys.exit(f"No KEYCARD_ADMIN_TOKEN and no CLI keychain token readable ({e}). "
-                 "Sign in with `keycard auth signin` or export KEYCARD_ADMIN_TOKEN.")
+        payload = json.loads(text) if text else {}
+    except json.JSONDecodeError:
+        payload = {"raw": text[:300]}
+    if out.returncode != 0:
+        payload.setdefault("cli_error", out.stderr.strip()[:300])
+        payload["_failed"] = True
+    if isinstance(payload, dict) and payload.get("status", 0) >= 400:
+        payload["_failed"] = True
+    return payload if isinstance(payload, dict) else {"items": payload}
 
 
-def api(token: str, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
-    req = urllib.request.Request(
-        f"{API_BASE}{path}",
-        method=method,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers={
-            "Authorization": f"Bearer {token}",
-            # Cloudflare rejects urllib's default agent signature (error 1010).
-            "User-Agent": "mdb-temporal-keycard-provision/1.0",
-            "Accept": "application/json",
-            **({"Content-Type": "application/json"} if body is not None else {}),
-        },
-    )
-    try:
-        with urllib.request.urlopen(req) as resp:
-            text = resp.read().decode()
-            return resp.status, json.loads(text) if text else {}
-    except urllib.error.HTTPError as e:
-        text = e.read().decode()
-        try:
-            return e.code, json.loads(text)
-        except json.JSONDecodeError:
-            return e.code, {"raw": text[:300]}
-
-
-def must(status: int, payload: dict, what: str) -> dict:
-    if status >= 300:
-        sys.exit(f"{what} failed: HTTP {status} {json.dumps(payload)[:300]}")
+def must(payload: dict, what: str) -> dict:
+    if payload.get("_failed"):
+        sys.exit(f"{what} failed: {json.dumps(payload)[:400]}")
     return payload
 
 
 def find_items(payload: dict) -> list[dict]:
-    if isinstance(payload, list):
-        return payload
-    for key in ("items", "data", "results"):
+    if isinstance(payload.get("items"), list):
+        return payload["items"]
+    for key in ("data", "results"):
         if isinstance(payload.get(key), list):
             return payload[key]
     return []
 
 
-def main() -> None:
-    token = admin_token()
+def env_values() -> dict[str, str]:
+    values: dict[str, str] = {}
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                values[k.strip()] = v.strip()
+    return values
 
-    # Sanity: can we see the zone?
-    status, zone = api(token, "GET", f"/zones/{ZONE_ID}")
-    must(status, zone, f"GET zone {ZONE_ID} (is the token an org admin session, and API base {API_BASE} right?)")
+
+def append_env(lines: list[str]) -> None:
+    with ENV_FILE.open("a") as f:
+        f.write("\n# --- added by infra/provision_keycard.py ---\n")
+        f.write("\n".join(lines) + "\n")
+
+
+def main() -> None:
+    zone = must(api("GET", f"/zones/{ZONE_ID}"), f"GET zone {ZONE_ID}")
     print(f"zone: {zone.get('name', ZONE_ID)}")
 
-    # Vault provider (per-zone; created by the platform, but create one if absent).
-    status, provs = api(token, "GET", f"/zones/{ZONE_ID}/providers?type=keycard-vault")
-    must(status, provs, "list providers")
+    provs = must(api("GET", f"/zones/{ZONE_ID}/providers?type=keycard-vault"), "list providers")
     vaults = [p for p in find_items(provs) if p.get("type") == "keycard-vault"]
     if vaults:
         vault_id = vaults[0]["id"]
     else:
-        status, created = api(token, "POST", f"/zones/{ZONE_ID}/providers",
-                              {"name": "Keycard Vault", "type": "keycard-vault"})
-        vault_id = must(status, created, "create vault provider")["id"]
+        created = must(api("POST", f"/zones/{ZONE_ID}/providers",
+                           {"name": "Keycard Vault", "type": "keycard-vault"}),
+                       "create vault provider")
+        vault_id = created["id"]
     print(f"vault provider: {vault_id}")
 
-    # Application (reuse by name if it exists).
-    status, apps = api(token, "GET", f"/zones/{ZONE_ID}/applications")
-    must(status, apps, "list applications")
+    apps = must(api("GET", f"/zones/{ZONE_ID}/applications"), "list applications")
     existing = [a for a in find_items(apps) if a.get("name") == APP_NAME]
     if existing:
         app = existing[0]
         print(f"application (existing): {app['id']}")
     else:
-        status, app = api(token, "POST", f"/zones/{ZONE_ID}/applications", {"name": APP_NAME})
-        app = must(status, app, "create application")
+        app = must(api("POST", f"/zones/{ZONE_ID}/applications",
+                       {"name": APP_NAME, "identifier": APP_NAME}),
+                   "create application")
         print(f"application: {app['id']}")
 
-    # Client-secret credential (always minted fresh; old ones stay valid unless revoked).
-    status, cred = api(token, "POST", f"/zones/{ZONE_ID}/application-credentials",
-                       {"application_id": app["id"], "type": "password"})
-    cred = must(status, cred, "create application credential")
-    client_id, client_secret = cred.get("identifier"), cred.get("password")
-    if not (client_id and client_secret):
-        sys.exit(f"credential response missing identifier/password: keys={sorted(cred)}")
-    print(f"client credential: {client_id}")
-
-    env_lines = [
-        f"KEYCARD_ZONE_URL=https://{ZONE_ID}.keycard.cloud",
-        f"KEYCARD_CLIENT_ID={client_id}",
-        f"KEYCARD_CLIENT_SECRET={client_secret}",
-    ]
+    env = env_values()
+    new_env: list[str] = []
+    if env.get("KEYCARD_CLIENT_ID") and env.get("KEYCARD_CLIENT_SECRET"):
+        print(f"client credential (existing in .env): {env['KEYCARD_CLIENT_ID']}")
+    else:
+        cred = must(api("POST", f"/zones/{ZONE_ID}/application-credentials",
+                        {"application_id": app["id"], "type": "password"}),
+                    "create application credential")
+        client_id, client_secret = cred.get("identifier"), cred.get("password")
+        if not (client_id and client_secret):
+            sys.exit(f"credential response missing identifier/password: keys={sorted(cred)}")
+        print(f"client credential (minted, written to .env): {client_id}")
+        new_env += [
+            f"KEYCARD_ZONE_URL=https://{ZONE_ID}.keycard.cloud",
+            f"KEYCARD_CLIENT_ID={client_id}",
+            f"KEYCARD_CLIENT_SECRET={client_secret}",
+        ]
 
     for secret_env, ident_env, default_ident, name in RESOURCES:
-        identifier = os.environ.get(ident_env, default_ident)
-        value = os.environ.get(secret_env) or getpass.getpass(f"{name} secret ({secret_env}, blank to skip): ")
-        if not value:
-            print(f"skipped: {name}")
-            continue
+        identifier = os.environ.get(ident_env) or env.get(ident_env) or default_ident
 
-        status, found = api(token, "GET",
-                            f"/zones/{ZONE_ID}/resources?filter[identifier]={urllib.parse.quote(identifier, safe='')}")
-        must(status, found, f"list resources for {identifier}")
+        found = must(api("GET", f"/zones/{ZONE_ID}/resources?filter[identifier]="
+                                + urllib.parse.quote(identifier, safe="")),
+                     f"list resources for {identifier}")
         hits = [r for r in find_items(found) if r.get("identifier") == identifier]
         if hits:
             res = hits[0]
             print(f"resource (existing): {identifier} -> {res['id']}")
         else:
-            status, res = api(token, "POST", f"/zones/{ZONE_ID}/resources",
-                              {"name": name, "identifier": identifier, "credential_provider_id": vault_id})
-            res = must(status, res, f"create resource {identifier}")
+            res = must(api("POST", f"/zones/{ZONE_ID}/resources",
+                           {"name": name, "identifier": identifier,
+                            "credential_provider_id": vault_id}),
+                       f"create resource {identifier}")
             print(f"resource: {identifier} -> {res['id']}")
 
-        status, secret = api(token, "POST", f"/zones/{ZONE_ID}/secrets",
-                             {"name": f"{name} credential", "entity_id": res["id"],
-                              "data": {"type": "token", "token": value}})
-        must(status, secret, f"vault secret for {identifier}")
-        print(f"vaulted: {identifier} (secret {secret.get('id', '?')})")
+        value = os.environ.get(secret_env, "")
+        if value:
+            secret = must(api("POST", f"/zones/{ZONE_ID}/secrets",
+                              {"name": f"{name} credential", "entity_id": res["id"],
+                               "data": {"type": "token", "token": value}}),
+                          f"vault secret for {identifier}")
+            print(f"vaulted: {identifier} (secret {secret.get('id', '?')})")
+        else:
+            print(f"vault write skipped for {identifier} ({secret_env} not set)")
 
-        status, dep = api(token, "PUT",
-                          f"/zones/{ZONE_ID}/applications/{app['id']}/dependencies/{res['id']}")
-        if status >= 300 and status != 409:
-            must(status, dep, f"dependency {identifier}")
+        dep = api("PUT", f"/zones/{ZONE_ID}/applications/{app['id']}/dependencies/{res['id']}")
+        if dep.get("_failed") and dep.get("status") != 409:
+            must(dep, f"dependency {identifier}")
         print(f"dependency: {APP_NAME} -> {identifier}")
 
-        env_lines.append(f"{ident_env}={identifier}")
+        if ident_env not in env:
+            new_env.append(f"{ident_env}={identifier}")
 
-    print("\nAdd to .env (client secret shown once):\n")
-    print("\n".join(env_lines))
+    if new_env:
+        append_env(new_env)
+        print(f"\nwrote {len(new_env)} line(s) to {ENV_FILE} (secrets never printed)")
+    else:
+        print("\n.env already complete; nothing written")
 
 
 if __name__ == "__main__":
