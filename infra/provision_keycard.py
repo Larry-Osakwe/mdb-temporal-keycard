@@ -66,6 +66,9 @@ def api(token: str, method: str, path: str, body: dict | None = None) -> tuple[i
         data=json.dumps(body).encode() if body is not None else None,
         headers={
             "Authorization": f"Bearer {token}",
+            # Cloudflare rejects urllib's default agent signature (error 1010).
+            "User-Agent": "mdb-temporal-keycard-provision/1.0",
+            "Accept": "application/json",
             **({"Content-Type": "application/json"} if body is not None else {}),
         },
     )
