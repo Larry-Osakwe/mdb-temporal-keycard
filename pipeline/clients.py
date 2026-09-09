@@ -18,13 +18,26 @@ if TYPE_CHECKING:  # avoid importing heavy deps at module load
     from pymongo import MongoClient
 
 
-@lru_cache(maxsize=1)
-def mongo_client() -> "MongoClient":
+@lru_cache(maxsize=4)
+def _mongo_client_for(uri: str) -> "MongoClient":
     from pymongo import MongoClient
 
-    if not settings.mongodb_uri:
-        raise RuntimeError("MONGODB_URI is not set — populate .env before running.")
-    return MongoClient(settings.mongodb_uri, appname="teamporal-app")
+    return MongoClient(uri, appname="teamporal-app")
+
+
+def mongo_client() -> "MongoClient":
+    from .keycard import mongodb_uri
+
+    uri = mongodb_uri()
+    if not uri:
+        raise RuntimeError(
+            "MONGODB_URI is not set — populate .env before running, "
+            "or configure Keycard (KEYCARD_ZONE_URL) to vault it."
+        )
+    # Cached per URI: an unchanged credential reuses one connection pool, and a
+    # rotation in Keycard yields a new URI, hence a fresh client, on the next
+    # activity execution.
+    return _mongo_client_for(uri)
 
 
 def knowledge_collection(name: str | None = None):
@@ -32,13 +45,23 @@ def knowledge_collection(name: str | None = None):
     return db[name or settings.knowledge_collection]
 
 
-@lru_cache(maxsize=1)
-def voyage_client() -> "voyageai.Client":
+@lru_cache(maxsize=4)
+def _voyage_client_for(api_key: str) -> "voyageai.Client":
     import voyageai
 
-    if not settings.voyage_api_key:
-        raise RuntimeError("VOYAGE_API_KEY is not set — populate .env before running.")
-    return voyageai.Client(api_key=settings.voyage_api_key)
+    return voyageai.Client(api_key=api_key)
+
+
+def voyage_client() -> "voyageai.Client":
+    from .keycard import voyage_api_key
+
+    key = voyage_api_key()
+    if not key:
+        raise RuntimeError(
+            "VOYAGE_API_KEY is not set — populate .env before running, "
+            "or configure Keycard (KEYCARD_ZONE_URL) to vault it."
+        )
+    return _voyage_client_for(key)
 
 
 def _aws_kwargs() -> dict:

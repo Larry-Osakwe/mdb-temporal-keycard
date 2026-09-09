@@ -26,11 +26,28 @@ async def main() -> None:
     # The durable research agent (OpenAI Agents SDK) is opt-in: it loads only when
     # OPENAI_API_KEY is set, because the plugin builds an OpenAI client at worker startup.
     # Without a key the worker still runs ingestion/backfill exactly as before.
+    from .keycard import keycard_enabled, openai_api_key
+
+    # Keycard mode: the interceptor mints a fresh credential for every activity
+    # execution (each activity declares its resource with @grant), so the
+    # upstream secrets never sit in .env or workflow history. The worker's own
+    # identity comes from KEYCARD_CLIENT_ID / KEYCARD_CLIENT_SECRET.
+    interceptors: list = []
+    if keycard_enabled():
+        from keycardai.temporal import KeycardInterceptor
+
+        interceptors.append(KeycardInterceptor(settings.keycard_zone_url))
+        print(f"[worker] Keycard mode: credentials minted from {settings.keycard_zone_url}")
+
     plugins: list = []
     agent_workflows: list = []
     agent_activities: list = []
-    if settings.openai_api_key:
-        os.environ.setdefault("OPENAI_API_KEY", settings.openai_api_key)
+    # The agents plugin builds its OpenAI client at worker startup, before any
+    # activity exists, so this key is minted once per worker boot (Keycard mode)
+    # rather than per activity execution.
+    resolved_openai_key = openai_api_key()
+    if resolved_openai_key:
+        os.environ["OPENAI_API_KEY"] = resolved_openai_key
         plugins.append(
             OpenAIAgentsPlugin(
                 model_params=ModelActivityParameters(
@@ -58,6 +75,7 @@ async def main() -> None:
             workflows=[*ALL_WORKFLOWS, *agent_workflows],
             activities=[*ALL_ACTIVITIES, *agent_activities],
             activity_executor=executor,
+            interceptors=interceptors,
         )
         print(
             f"[worker] connected to {settings.temporal_address} "
