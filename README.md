@@ -199,10 +199,24 @@ identity token file over everything else, reading the conventions for EKS
 (IRSA's `AWS_WEB_IDENTITY_TOKEN_FILE`), AWS container credentials, Azure
 federated tokens, and SPIRE JWT-SVIDs written to a file. The worker then
 starts with an empty secret environment: its identity comes from the platform,
-and everything else mints per activity. One related note for Temporal Cloud:
+and everything else mints per activity.
+
+Vaulting and federation are different strengths of "disappears". A vaulted
+secret leaves `.env` but still exists: a long-lived key in the zone's vault,
+delivered just in time, rotated by hand. Federation removes the secret
+entirely: the workload presents a short-lived identity token, the far side
+verifies it against a registered issuer, and a minutes-lived access token
+comes back, so there is nothing to store, rotate, or leak. OpenAI now
+supports exactly this (workload identity federation for API access), which
+opens two upgrades for the vaulted OpenAI key here: exchange the worker's
+platform identity with OpenAI directly, or register the Keycard zone itself
+as the OIDC issuer, so the same per-activity Keycard token an activity
+already mints becomes the input OpenAI exchanges. The second keeps Keycard
+as the authorization and audit point for every model call. The vault then
+remains only for services that cannot verify identity, which today means
+Voyage and the Atlas connection string. One related note for Temporal Cloud:
 the namespace API key (or mTLS key) a worker uses to reach Temporal Cloud is
-itself a static secret, and it vaults in Keycard the same way the OpenAI key
-does here, minted at worker start.
+itself a static secret, and it vaults in Keycard the same way.
 
 Enable Keycard mode (optional; without it the repo runs from `.env` exactly as
 before). The full walkthrough, including the kill-and-rotate demo script, is in
