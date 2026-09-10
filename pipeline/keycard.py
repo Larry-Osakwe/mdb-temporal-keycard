@@ -4,16 +4,23 @@ Keycard mode is opt-in: set KEYCARD_ZONE_URL (plus KEYCARD_CLIENT_ID /
 KEYCARD_CLIENT_SECRET for the worker's application credential) and the three
 upstream secrets move out of .env entirely:
 
-- MongoDB Atlas: the connection string lives in Keycard's vault behind the
-  resource named by KEYCARD_MONGODB_RESOURCE. Every Temporal activity carries
-  @grant(mongodb_resource), so the worker's KeycardInterceptor mints the
-  credential fresh for each activity execution and access() returns it inside
-  the activity. Nothing credential-shaped enters workflow history, which
-  Temporal persists and replays.
-- Voyage AI and OpenAI: their API keys live in the vault behind their own
-  resources and are minted here with a plain client-credentials grant, cached
-  until shortly before expiry. OpenAI is minted once at worker startup because
-  the OpenAI Agents plugin builds its client before any activity runs.
+- Inside Temporal activities, credentials come from the grant decorator: each
+  activity declares its resources with @grant, the worker's KeycardInterceptor
+  mints them fresh per execution, and access(resource) returns them. That is
+  the only minting path activities use.
+- Outside activities there is exactly one other path, mint_secret(): the
+  OpenAI key at worker startup (the OpenAI Agents plugin builds its client
+  before any activity exists) and the non-worker processes that share
+  pipeline.clients (the index-creation script, the HTTP APIs). Every call
+  mints fresh; there is no cache.
+
+The worker's own identity comes from keycardai.oauth's discover_credential
+convention. This demo runs on localhost with a client secret; on a platform
+that issues workload identity the same discovery picks up the platform token
+file instead (see the README's "last secret" section). App-as-itself minting
+with an assertion credential is pending SDK support, so mint_secret carries
+the same ClientSecret requirement as the interceptor's client-credentials
+path for now.
 
 Without KEYCARD_ZONE_URL everything falls back to the .env values, so the
 repo keeps working exactly as before.
@@ -21,8 +28,6 @@ repo keeps working exactly as before.
 
 from __future__ import annotations
 
-import threading
-import time
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -51,43 +56,41 @@ def export_credential_env() -> None:
 
 
 @lru_cache(maxsize=1)
-def _oauth_client() -> "Client":
-    """One zone client per process; its pooled transport is reused across mints."""
-    import os
+def _zone_client() -> "Client":
+    """One zone client per process, authenticated the way the interceptor is.
 
-    from keycardai.oauth import BasicAuth, Client
+    The credential comes from the SDK's discover_credential convention. Only a
+    ClientSecret can do app-as-itself minting today (the interceptor documents
+    the same restriction), so anything else fails with a pointed error rather
+    than a confusing 401.
+    """
+    from keycardai.oauth import Client
+    from keycardai.oauth.server import ClientSecret, discover_credential
 
     export_credential_env()
-    client_id = os.environ.get("KEYCARD_CLIENT_ID", "")
-    client_secret = os.environ.get("KEYCARD_CLIENT_SECRET", "")
-    if not (client_id and client_secret):
+    credential = discover_credential()
+    if credential is None:
         raise RuntimeError(
-            "Keycard mode needs KEYCARD_CLIENT_ID and KEYCARD_CLIENT_SECRET "
-            "alongside KEYCARD_ZONE_URL."
+            "Keycard mode needs an application credential; set KEYCARD_CLIENT_ID "
+            "and KEYCARD_CLIENT_SECRET alongside KEYCARD_ZONE_URL."
         )
-    return Client(settings.keycard_zone_url, auth=BasicAuth(client_id, client_secret))
+    if not isinstance(credential, ClientSecret):
+        raise RuntimeError(
+            "App-as-itself minting outside activities requires a ClientSecret "
+            f"credential; discovered {type(credential).__name__}. Workload "
+            "identity support for this path is pending in the SDK."
+        )
+    # The credential carries its auth strategy; reuse it rather than rebuilding.
+    return Client(settings.keycard_zone_url, auth=credential.auth)
 
 
-_cache_lock = threading.Lock()
-_secret_cache: dict[str, tuple[str, float]] = {}
-
-
-def service_secret(resource: str) -> str:
+def mint_secret(resource: str) -> str:
     """Mint the vault-held secret for `resource` (client-credentials grant).
 
-    Cached until 60 seconds before expiry, so rotation in Keycard propagates
-    without a worker restart. Thread-safe: activities run in a thread pool.
+    Per-call mint, no cache: rotation in Keycard propagates immediately, and
+    the callers are one-shot (worker startup, infra scripts, API startup).
     """
-    now = time.monotonic()
-    with _cache_lock:
-        hit = _secret_cache.get(resource)
-        if hit and hit[1] > now:
-            return hit[0]
-    token = _oauth_client().client_credentials_grant(resource=resource)
-    expires = now + max((token.expires_in or 300) - 60, 30)
-    with _cache_lock:
-        _secret_cache[resource] = (token.access_token, expires)
-    return token.access_token
+    return _zone_client().client_credentials_grant(resource=resource).access_token
 
 
 def activity_grant_token(resource: str) -> str | None:
@@ -108,25 +111,25 @@ def activity_grant_token(resource: str) -> str | None:
 
 def mongodb_uri() -> str:
     """The Atlas connection string: per-activity mint inside activities, a
-    cached service mint everywhere else, .env outside Keycard mode."""
+    fresh service mint everywhere else, .env outside Keycard mode."""
     if not keycard_enabled():
         return settings.mongodb_uri
     return activity_grant_token(
         settings.keycard_mongodb_resource
-    ) or service_secret(settings.keycard_mongodb_resource)
+    ) or mint_secret(settings.keycard_mongodb_resource)
 
 
 def voyage_api_key() -> str:
-    """Per-activity grant first (embed/rerank/search declare Voyage), service
-    mint as the fallback for any caller outside a granted activity."""
+    """Per-activity grant (embed/rerank/search declare Voyage); a fresh
+    service mint only for callers outside a granted activity."""
     if not keycard_enabled():
         return settings.voyage_api_key
     return activity_grant_token(
         settings.keycard_voyage_resource
-    ) or service_secret(settings.keycard_voyage_resource)
+    ) or mint_secret(settings.keycard_voyage_resource)
 
 
 def openai_api_key() -> str:
     if not keycard_enabled():
         return settings.openai_api_key
-    return service_secret(settings.keycard_openai_resource)
+    return mint_secret(settings.keycard_openai_resource)
