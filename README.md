@@ -158,7 +158,8 @@ How it composes with Temporal:
   string is minted this way, per activity execution.
 - The Voyage key is minted per activity execution too: the embed, rerank, and
   vector-search activities declare both resources in one `@grant`. The OpenAI
-  key is minted from the vault once per worker start (`pipeline/keycard.py`),
+  key is minted from the vault once per worker start (inline in
+  `pipeline/worker.py`, pending a Keycard model provider for the plugin),
   because the agents plugin builds its client before any activity runs.
 - Nothing credential-shaped enters workflow history. Temporal persists and
   replays history indefinitely, which is exactly where a static token does the

@@ -39,7 +39,7 @@ cat .env.example | grep -A4 "S3_ENDPOINT_URL" >> .env   # or copy the S3/MinIO b
 # 3. Bring everything up, create the vector index, seed the corpus
 make setup
 make start          # MinIO, Temporal dev server, worker, trigger API, agent API + UI
-make index          # one-time Atlas Vector Search index
+make index          # Atlas index bootstrap; in Keycard mode it runs as a workflow
 make seed           # sample document through the full durable pipeline
 ```
 
@@ -119,10 +119,10 @@ Windows to have open: the agent UI (http://localhost:5173), the Temporal UI
 
 ## Troubleshooting
 
-- Worker exits at startup with a credential discovery error: `.env` is read by
-  pydantic-settings, and the worker exports the Keycard client credential into
-  the process environment itself. Check `KEYCARD_CLIENT_ID` /
-  `KEYCARD_CLIENT_SECRET` are present in `.env`.
+- Worker exits at startup with a credential error: the worker builds its
+  ClientSecret from `.env` via settings and passes it to the interceptor
+  explicitly. Check `KEYCARD_CLIENT_ID` / `KEYCARD_CLIENT_SECRET` are present
+  in `.env`.
 - `make seed` fails with `S3_BUCKET is not set`: the local MinIO block from
   `.env.example` is missing from `.env` (step 2 above).
 - Research endpoint returns 503: the agent loads only when an OpenAI key is

@@ -26,19 +26,25 @@ async def main() -> None:
     # The durable research agent (OpenAI Agents SDK) is opt-in: it loads only when
     # OPENAI_API_KEY is set, because the plugin builds an OpenAI client at worker startup.
     # Without a key the worker still runs ingestion/backfill exactly as before.
-    from .keycard import export_credential_env, keycard_enabled, openai_api_key
+    from .clients import keycard_enabled
 
     # Keycard mode: the interceptor mints a fresh credential for every activity
-    # execution (each activity declares its resource with @grant), so the
+    # execution (each activity declares its resources with @grant), so the
     # upstream secrets never sit in .env or workflow history. The worker's own
-    # identity comes from KEYCARD_CLIENT_ID / KEYCARD_CLIENT_SECRET.
+    # identity is the client-secret credential from settings, passed explicitly
+    # so nothing depends on process environment variables.
     interceptors: list = []
+    credential = None
     if keycard_enabled():
+        from keycardai.oauth.server import ClientSecret
         from keycardai.temporal import KeycardInterceptor
 
-        export_credential_env()
-
-        interceptors.append(KeycardInterceptor(settings.keycard_zone_url))
+        credential = ClientSecret(
+            (settings.keycard_client_id, settings.keycard_client_secret)
+        )
+        interceptors.append(
+            KeycardInterceptor(settings.keycard_zone_url, credential=credential)
+        )
         print(f"[worker] Keycard mode: credentials minted from {settings.keycard_zone_url}")
 
     plugins: list = []
@@ -46,8 +52,18 @@ async def main() -> None:
     agent_activities: list = []
     # The agents plugin builds its OpenAI client at worker startup, before any
     # activity exists, so this key is minted once per worker boot (Keycard mode)
-    # rather than per activity execution.
-    resolved_openai_key = openai_api_key()
+    # rather than per activity execution. A Keycard model provider for the
+    # plugin (per-call minting) is tracked upstream; until then this is the one
+    # inline mint in the repo.
+    if credential is not None:
+        from keycardai.oauth import Client as KeycardClient
+
+        with KeycardClient(settings.keycard_zone_url, auth=credential.auth) as kc:
+            resolved_openai_key = kc.client_credentials_grant(
+                resource=settings.keycard_openai_resource
+            ).access_token
+    else:
+        resolved_openai_key = settings.openai_api_key
     if resolved_openai_key:
         os.environ["OPENAI_API_KEY"] = resolved_openai_key
         plugins.append(

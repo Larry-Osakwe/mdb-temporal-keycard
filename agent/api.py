@@ -38,6 +38,22 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def ensure_index_on_startup() -> None:
+    from pipeline.clients import keycard_enabled
+
+    if keycard_enabled():
+        # In Keycard mode the bootstrap runs as a workflow, so the Mongo
+        # credential is minted per activity execution like everything else.
+        try:
+            client = await _get_agent_client()
+            result = await client.execute_workflow(
+                "BootstrapIndexesWorkflow",
+                id="bootstrap-indexes",
+                task_queue=settings.temporal_task_queue,
+            )
+            logger.info("Bootstrap workflow completed: %s", result)
+        except Exception:
+            logger.exception("Bootstrap workflow failed at startup")
+        return
     try:
         boot = ensure_collections_and_indexes()
         if boot["collections"]:
@@ -90,7 +106,7 @@ class ResearchRequest(BaseModel):
 async def research(req: ResearchRequest) -> dict:
     """Start the durable research agent (OpenAI Agents SDK on Temporal). Returns the workflow
     id immediately; poll GET /research/{workflow_id} for live progress and the final answer."""
-    from pipeline.keycard import keycard_enabled
+    from pipeline.clients import keycard_enabled
 
     if not (settings.openai_api_key or keycard_enabled()):
         raise HTTPException(
