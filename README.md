@@ -183,7 +183,9 @@ the activity mints fresh. Revoking a credential no longer strands in-flight
 work, and the zone's audit log shows every mint attributed to the worker's
 identity.
 
-Enable it (optional; without it the repo runs from `.env` exactly as before):
+Enable it (optional; without it the repo runs from `.env` exactly as before).
+The full walkthrough, including the kill-and-rotate demo script, is in
+[docs/keycard-demo-runbook.md](docs/keycard-demo-runbook.md):
 
 ```bash
 # one-time zone setup: application, vault-backed resources, dependencies
