@@ -90,10 +90,15 @@ class ResearchRequest(BaseModel):
 async def research(req: ResearchRequest) -> dict:
     """Start the durable research agent (OpenAI Agents SDK on Temporal). Returns the workflow
     id immediately; poll GET /research/{workflow_id} for live progress and the final answer."""
-    if not settings.openai_api_key:
+    from pipeline.keycard import keycard_enabled
+
+    if not (settings.openai_api_key or keycard_enabled()):
         raise HTTPException(
             status_code=503,
-            detail="Research agent unavailable: set OPENAI_API_KEY in .env and restart the worker.",
+            detail=(
+                "Research agent unavailable: set OPENAI_API_KEY in .env (or configure "
+                "Keycard, which vaults it) and restart the worker."
+            ),
         )
     client = await _get_agent_client()
     wf_id = f"agent-{uuid.uuid4().hex[:16]}"
