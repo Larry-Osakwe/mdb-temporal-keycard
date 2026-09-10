@@ -73,9 +73,9 @@ class Settings(BaseSettings):
     # Setting keycard_zone_url turns Keycard mode on: mongodb_uri,
     # voyage_api_key, and openai_api_key above may then stay empty, and the
     # secrets are minted just-in-time from the zone's vault instead.
-    # KEYCARD_CLIENT_ID / KEYCARD_CLIENT_SECRET are read by the Keycard SDK
-    # itself and deliberately have no fields here.
     keycard_zone_url: str = ""
+    keycard_client_id: str = ""
+    keycard_client_secret: str = ""
     keycard_mongodb_resource: str = "https://cluster.mongodb.net"
     keycard_voyage_resource: str = "https://api.voyageai.com"
     keycard_openai_resource: str = "https://api.openai.com"

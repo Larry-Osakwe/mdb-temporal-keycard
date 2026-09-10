@@ -36,6 +36,20 @@ def keycard_enabled() -> bool:
     return bool(settings.keycard_zone_url)
 
 
+def export_credential_env() -> None:
+    """Seed the process environment from settings for the Keycard SDK.
+
+    pydantic-settings reads .env into the settings object without touching
+    os.environ, but the SDK's discover_credential() reads the environment.
+    """
+    import os
+
+    if settings.keycard_client_id:
+        os.environ.setdefault("KEYCARD_CLIENT_ID", settings.keycard_client_id)
+    if settings.keycard_client_secret:
+        os.environ.setdefault("KEYCARD_CLIENT_SECRET", settings.keycard_client_secret)
+
+
 @lru_cache(maxsize=1)
 def _oauth_client() -> "Client":
     """One zone client per process; its pooled transport is reused across mints."""
@@ -43,6 +57,7 @@ def _oauth_client() -> "Client":
 
     from keycardai.oauth import BasicAuth, Client
 
+    export_credential_env()
     client_id = os.environ.get("KEYCARD_CLIENT_ID", "")
     client_secret = os.environ.get("KEYCARD_CLIENT_SECRET", "")
     if not (client_id and client_secret):
@@ -75,16 +90,18 @@ def service_secret(resource: str) -> str:
     return token.access_token
 
 
-def activity_grant_token() -> str | None:
+def activity_grant_token(resource: str) -> str | None:
     """The credential the KeycardInterceptor minted for this activity execution.
 
-    Returns None outside an activity (the trigger/agent HTTP APIs and infra
-    scripts share pipeline.clients but run outside Temporal).
+    Selects by resource, since activities here grant several (Atlas plus
+    Voyage). Returns None outside an activity (the trigger/agent HTTP APIs and
+    infra scripts share pipeline.clients but run outside Temporal) and for
+    resources the running activity's grant does not declare.
     """
     try:
         from keycardai.temporal import access
 
-        return access().access_token
+        return access(resource).access_token
     except Exception:
         return None
 
@@ -94,13 +111,19 @@ def mongodb_uri() -> str:
     cached service mint everywhere else, .env outside Keycard mode."""
     if not keycard_enabled():
         return settings.mongodb_uri
-    return activity_grant_token() or service_secret(settings.keycard_mongodb_resource)
+    return activity_grant_token(
+        settings.keycard_mongodb_resource
+    ) or service_secret(settings.keycard_mongodb_resource)
 
 
 def voyage_api_key() -> str:
+    """Per-activity grant first (embed/rerank/search declare Voyage), service
+    mint as the fallback for any caller outside a granted activity."""
     if not keycard_enabled():
         return settings.voyage_api_key
-    return service_secret(settings.keycard_voyage_resource)
+    return activity_grant_token(
+        settings.keycard_voyage_resource
+    ) or service_secret(settings.keycard_voyage_resource)
 
 
 def openai_api_key() -> str:

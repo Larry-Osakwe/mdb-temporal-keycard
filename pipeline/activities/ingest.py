@@ -67,7 +67,7 @@ def fetch_and_stage_chunks(ref: S3Ref) -> dict:
     return {"doc_id": doc_id, "doc_hash": doc_hash, "n": len(raws), "status": "staged", "extractor": extractor.name}
 
 
-@grant(settings.keycard_mongodb_resource)
+@grant(settings.keycard_mongodb_resource, settings.keycard_voyage_resource)
 @activity.defn
 def embed_staged_chunk(chunk_id: str, model: str | None = None) -> str:
     """Stage 2: embed one staged chunk (idempotent — skips if already embedded with this model)."""

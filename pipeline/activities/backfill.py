@@ -36,7 +36,7 @@ def read_source_batch(after_id: str | None, limit: int, source_collection: str) 
     return out
 
 
-@grant(settings.keycard_mongodb_resource)
+@grant(settings.keycard_mongodb_resource, settings.keycard_voyage_resource)
 @activity.defn
 def reembed_and_write(doc: dict[str, Any], model: str, target_collection: str) -> str:
     """Re-embed one chunk with the new model and upsert into the target collection."""

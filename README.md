@@ -156,8 +156,9 @@ How it composes with Temporal:
   the activity, the interceptor mints a fresh credential for that execution and
   `access()` returns it inside the activity. The MongoDB Atlas connection
   string is minted this way, per activity execution.
-- Voyage and OpenAI keys are minted from the vault with a client-credentials
-  grant (`pipeline/keycard.py`), cached briefly; OpenAI once per worker start,
+- The Voyage key is minted per activity execution too: the embed, rerank, and
+  vector-search activities declare both resources in one `@grant`. The OpenAI
+  key is minted from the vault once per worker start (`pipeline/keycard.py`),
   because the agents plugin builds its client before any activity runs.
 - Nothing credential-shaped enters workflow history. Temporal persists and
   replays history indefinitely, which is exactly where a static token does the
@@ -213,9 +214,9 @@ flowchart LR
   worker. The worker authenticates to it as an application; the three upstream
   secrets live in its vault.
 - Annotated edges: **worker → Atlas** and **worker → Voyage** carry credentials
-  minted per activity execution; **worker → OpenAI** carries one minted at
-  worker start. No static keys ride any of these edges, and none appear in
-  workflow history.
+  minted per activity execution (one `@grant` declares both); **worker →
+  OpenAI** carries one minted at worker start. No static keys ride any of
+  these edges, and none appear in workflow history.
 
 ---
 
