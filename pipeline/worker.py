@@ -50,22 +50,27 @@ async def main() -> None:
     plugins: list = []
     agent_workflows: list = []
     agent_activities: list = []
-    # The agents plugin builds its OpenAI client at worker startup, before any
-    # activity exists, so this key is minted once per worker boot (Keycard mode)
-    # rather than per activity execution. A Keycard model provider for the
-    # plugin (per-call minting) is tracked upstream; until then this is the one
-    # inline mint in the repo.
+    # In Keycard mode the plugin's model credential comes from the Keycard
+    # model provider: the OpenAI key mints from the vault per model call
+    # (cached briefly), so rotation propagates without a worker restart and
+    # nothing is exported into the environment.
     if credential is not None:
-        from keycardai.oauth import Client as KeycardClient
+        from keycardai.temporal.openai_agents import KeycardOpenAIProvider
 
-        with KeycardClient(settings.keycard_zone_url, auth=credential.auth) as kc:
-            resolved_openai_key = kc.client_credentials_grant(
-                resource=settings.keycard_openai_resource
-            ).access_token
-    else:
-        resolved_openai_key = settings.openai_api_key
-    if resolved_openai_key:
-        os.environ["OPENAI_API_KEY"] = resolved_openai_key
+        plugins.append(
+            OpenAIAgentsPlugin(
+                model_params=ModelActivityParameters(
+                    start_to_close_timeout=timedelta(seconds=60)
+                ),
+                model_provider=KeycardOpenAIProvider(
+                    settings.keycard_zone_url,
+                    settings.keycard_openai_resource,
+                    credential=credential,
+                ),
+            )
+        )
+    elif settings.openai_api_key:
+        os.environ["OPENAI_API_KEY"] = settings.openai_api_key
         plugins.append(
             OpenAIAgentsPlugin(
                 model_params=ModelActivityParameters(
@@ -73,6 +78,7 @@ async def main() -> None:
                 )
             )
         )
+    if plugins:
         agent_workflows = [DeepResearchAgent]
         agent_activities = [vector_search_tool, rerank_tool]
     else:

@@ -158,9 +158,10 @@ How it composes with Temporal:
   string is minted this way, per activity execution.
 - The Voyage key is minted per activity execution too: the embed, rerank, and
   vector-search activities declare both resources in one `@grant`. The OpenAI
-  key is minted from the vault once per worker start (inline in
-  `pipeline/worker.py`, pending a Keycard model provider for the plugin),
-  because the agents plugin builds its client before any activity runs.
+  key mints per model call through `KeycardOpenAIProvider`
+  (`keycardai-temporal[openai-agents]`): the agents plugin builds its client
+  before any activity runs, so the provider hands that client an async key
+  callback that mints from the vault and refreshes on a short window.
 - Nothing credential-shaped enters workflow history. Temporal persists and
   replays history indefinitely, which is exactly where a static token does the
   most damage.
@@ -225,7 +226,7 @@ flowchart LR
     KC[Keycard zone<br/>identity + vault] -. "mints per-activity credentials" .-> T
     T -- "credential minted per activity" --> V[Voyage AI]
     T -- "credential minted per activity" --> A[MongoDB Atlas]
-    T -- "credential minted at worker start" --> O[OpenAI]
+    T -- "credential minted per model call" --> O[OpenAI]
     A --> AG[Deep research agent]
 ```
 
@@ -234,8 +235,9 @@ flowchart LR
   secrets live in its vault.
 - Annotated edges: **worker → Atlas** and **worker → Voyage** carry credentials
   minted per activity execution (one `@grant` declares both); **worker →
-  OpenAI** carries one minted at worker start. No static keys ride any of
-  these edges, and none appear in workflow history.
+  OpenAI** carries keys minted per model call through the Keycard model
+  provider. No static keys ride any of these edges, and none appear in
+  workflow history.
 
 ---
 

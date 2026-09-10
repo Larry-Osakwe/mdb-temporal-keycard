@@ -111,11 +111,11 @@ Windows to have open: the agent UI (http://localhost:5173), the Temporal UI
 - Walk the workflow history: durable, replayable, persisted indefinitely, and
   credential-free. That last property is the reason minting happens inside
   activities rather than passing tokens through workflow state.
-- Contrast per-execution with per-boot: Atlas and Voyage credentials mint per
-  activity execution (the dual-resource activities declare both in one
-  `@grant`), while the OpenAI key mints once per worker start, because the
-  OpenAI Agents plugin builds its client before any activity exists. Per-call
-  minting there needs a custom model provider (noted as follow-up work).
+- Everything mints just in time now: Atlas and Voyage per activity execution
+  (the dual-resource activities declare both in one `@grant`), and the OpenAI
+  key per model call through `KeycardOpenAIProvider`, refreshed on a short
+  window, so rotating any of the three vaulted secrets propagates without a
+  worker restart.
 
 ## Troubleshooting
 
