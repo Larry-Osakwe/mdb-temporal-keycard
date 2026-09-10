@@ -14,15 +14,15 @@ Tooling: `uv`, Docker, the Temporal CLI, Node 20+ (see
 
 External accounts:
 
-- **MongoDB Atlas**: a free M0 cluster works (it supports Vector Search). You
-  need one database user and the `mongodb+srv://` connection string with the
+- MongoDB Atlas: a free M0 cluster works (it supports Vector Search). You need
+  one database user and the `mongodb+srv://` connection string with the
   password embedded. Add the demo machine's IP to the Atlas network allowlist,
   and remember the venue's IP on event day.
-- **Voyage AI**: an API key. Add a payment method to the account: the free tier
+- Voyage AI: an API key, and add a payment method to the account. The free tier
   is capped at 3 requests per minute, which turns a 40-chunk ingest into a
   15-minute grind (durable, but slow). The free token allowance still applies
   after adding one.
-- **OpenAI**: an API key for the research agent.
+- OpenAI: an API key for the research agent.
 
 ## One-time setup
 
@@ -101,17 +101,17 @@ Windows to have open: the agent UI (http://localhost:5173), the Temporal UI
 
 ## What to point at while it runs
 
-- **Temporal UI, activity retries**: on the free Voyage tier, ingestion visibly
-  absorbs rate-limit failures through retry policies without re-embedding
-  completed chunks. In our verification the pipeline shrugged off roughly 300
-  rate-limit errors across two documents with zero lost work.
-- **Workflow history**: durable, replayable, persisted indefinitely, and
+- In the Temporal UI, open the activity retries. On the free Voyage tier,
+  ingestion visibly absorbs rate-limit failures through retry policies without
+  re-embedding completed chunks; in our verification the pipeline shrugged off
+  roughly 300 rate-limit errors across two documents with zero lost work.
+- Walk the workflow history: durable, replayable, persisted indefinitely, and
   credential-free. That last property is the reason minting happens inside
   activities rather than passing tokens through workflow state.
-- **Per-execution vs per-boot**: Atlas credentials mint per activity execution.
-  The OpenAI key mints once per worker start, because the OpenAI Agents plugin
-  builds its client before any activity exists; per-call minting there needs a
-  custom model provider (noted as follow-up work).
+- Contrast per-execution with per-boot: Atlas credentials mint per activity
+  execution, while the OpenAI key mints once per worker start, because the
+  OpenAI Agents plugin builds its client before any activity exists. Per-call
+  minting there needs a custom model provider (noted as follow-up work).
 
 ## Troubleshooting
 
