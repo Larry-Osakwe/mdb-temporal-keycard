@@ -184,8 +184,26 @@ the activity mints fresh. Revoking a credential no longer strands in-flight
 work, and the zone's audit log shows every mint attributed to the worker's
 identity.
 
-Enable it (optional; without it the repo runs from `.env` exactly as before).
-The full walkthrough, including the kill-and-rotate demo script, is in
+### The last secret, and how it disappears
+
+In this local demo the worker authenticates to Keycard with a client secret
+(`KEYCARD_CLIENT_ID` / `KEYCARD_CLIENT_SECRET`), because on a laptop no
+platform vouches for the workload. That trades three static secrets for one,
+and the one exists only because of localhost.
+
+Deployed to a platform that issues workload identity, the last secret goes
+away with no code changes: the SDK's credential discovery prefers a workload
+identity token file over everything else, reading the conventions for EKS
+(IRSA's `AWS_WEB_IDENTITY_TOKEN_FILE`), AWS container credentials, Azure
+federated tokens, and SPIRE JWT-SVIDs written to a file. The worker then
+starts with an empty secret environment: its identity comes from the platform,
+and everything else mints per activity. One related note for Temporal Cloud:
+the namespace API key (or mTLS key) a worker uses to reach Temporal Cloud is
+itself a static secret, and it vaults in Keycard the same way the OpenAI key
+does here, minted at worker start.
+
+Enable Keycard mode (optional; without it the repo runs from `.env` exactly as
+before). The full walkthrough, including the kill-and-rotate demo script, is in
 [docs/keycard-demo-runbook.md](docs/keycard-demo-runbook.md):
 
 ```bash

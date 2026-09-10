@@ -46,7 +46,10 @@ make seed           # sample document through the full durable pipeline
 The worker prints `[worker] Keycard mode: credentials minted from <zone-url>`
 at startup. `.env` holds only the Keycard client credential and resource
 identifiers; the Mongo, Voyage, and OpenAI secrets exist solely in the zone's
-vault.
+vault. The client secret itself is the local-demo posture: on a platform that
+issues workload identity (EKS IRSA, Azure federated tokens, a SPIRE cluster),
+the SDK's discovery picks up the platform token file instead and the worker
+starts with no secrets at all; see the README's "last secret" section.
 
 Seed extra documents (source_uri follows the key):
 
