@@ -33,7 +33,7 @@ if TYPE_CHECKING:  # avoid importing heavy deps at module load
     from pymongo import MongoClient
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=1)
 def _mongo_client_for(uri: str) -> "MongoClient":
     from pymongo import MongoClient
 
@@ -67,7 +67,7 @@ def knowledge_collection(name: str | None = None):
     return db[name or settings.knowledge_collection]
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=1)
 def _voyage_client_for(api_key: str) -> "voyageai.Client":
     import voyageai
 
