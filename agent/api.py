@@ -2,6 +2,8 @@
 
   POST /research            {query}      -> {workflow_id}            (start durable research agent)
   GET  /research/{wf_id}                 -> {steps[], answer, done…} (poll live progress)
+  GET  /keycard/access                   -> {allowed, resource, …}   (may the worker mint the Atlas credential?)
+  POST /keycard/access      {allowed}    -> {allowed, resource, …}   (flip it: deny or restore, live)
   GET  /health
 
 Run:  uv run python -m agent.api
@@ -9,6 +11,7 @@ Run:  uv run python -m agent.api
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -21,7 +24,11 @@ from pydantic import BaseModel
 from temporalio.client import Client
 from temporalio.contrib.openai_agents import ModelActivityParameters, OpenAIAgentsPlugin
 
-from infra.create_atlas_index import ensure_atlas_indexes, ensure_collections_and_indexes
+from infra import demo_policy
+from infra.create_atlas_index import (
+    ensure_atlas_indexes,
+    ensure_collections_and_indexes,
+)
 from pipeline.config import settings
 
 app = FastAPI(title="Temporal deep agent")
@@ -68,6 +75,48 @@ async def ensure_index_on_startup() -> None:
             logger.info("Atlas Search index already present for '%s'", settings.knowledge_collection)
     except Exception:
         logger.exception("Failed to bootstrap MongoDB collections/indexes on startup")
+
+
+class AccessRequest(BaseModel):
+    allowed: bool
+    resource: str | None = None
+
+
+def _require_keycard_mode() -> None:
+    from pipeline.clients import keycard_enabled
+
+    if not keycard_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail="Keycard mode is off (KEYCARD_ZONE_URL not set); nothing to toggle.",
+        )
+
+
+@app.get("/keycard/access")
+async def keycard_access() -> dict:
+    """Whether Keycard currently lets the worker application mint the Atlas credential.
+
+    Backed by the application's dependency on the resource; read through the
+    signed-in Keycard CLI, same as infra/demo_policy.py."""
+    _require_keycard_mode()
+    try:
+        return await asyncio.to_thread(demo_policy.access_state, settings.keycard_mongodb_resource)
+    except (LookupError, demo_policy.PolicyError) as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/keycard/access")
+async def keycard_set_access(req: AccessRequest) -> dict:
+    """Deny (allowed=false) or restore (allowed=true) the worker's access, effective on its
+    next mint. The agent UI's Keycard switch calls this."""
+    _require_keycard_mode()
+    resource = req.resource or settings.keycard_mongodb_resource
+    try:
+        state = await asyncio.to_thread(demo_policy.set_access, resource, req.allowed)
+    except (LookupError, demo_policy.PolicyError) as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    logger.info("Keycard access for %s set to %s", resource, "allowed" if req.allowed else "denied")
+    return state
 
 
 @app.get("/health")

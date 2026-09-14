@@ -10,4 +10,13 @@ export interface ProgressResponse {
   answer: string | null;
   model: string | null;
   done: boolean;
+  /** Keycard policy denials the workflow recorded (one per refused tool call). */
+  denials?: string[];
+}
+
+export interface AccessState {
+  application: string;
+  resource: string;
+  /** null when the zone did not report the dependency list. */
+  allowed: boolean | null;
 }

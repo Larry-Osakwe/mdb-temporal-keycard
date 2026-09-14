@@ -65,6 +65,10 @@ questions from content that was ingested through Keycard-minted credentials.
 Windows to have open: the agent UI (http://localhost:5173), the Temporal UI
 (http://localhost:8233), and the Keycard console on the zone's audit log.
 
+The agent UI's Keycard switch needs the agent API running on the machine
+where the Keycard CLI is signed in (`keycard auth signin`), because the
+policy flip rides that CLI session.
+
 Before the demo, delete the `MONGODB_URI` line from `.env`. In Keycard mode
 nothing on the demo path reads it (index creation routes through the bootstrap
 workflow), and its absence makes the point literal: no database credential
@@ -124,9 +128,12 @@ back afterwards.
    curl -s http://localhost:8090/research/<workflow_id>   # poll until done
    ```
 
-   Remove the MongoDB resource from the worker application's dependencies. In
-   Keycard's model that is the policy statement "this application may not be
-   issued this credential":
+   Flip the **Keycard policy** switch at the top of the agent page from
+   Allowed to Denied. That removes the MongoDB resource from the worker
+   application's dependencies, which in Keycard's model is the policy
+   statement "this application may not be issued this credential". The switch
+   calls `POST /keycard/access` on the agent API, which runs the same code as
+   the terminal fallback:
 
    ```bash
    uv run python -m infra.demo_policy deny
@@ -137,16 +144,12 @@ back afterwards.
    Temporal UI to show it; the zone's own message reads `Application
    "temporal-pipeline-worker" is not allowed to access "MongoDB Atlas"`). The
    agent receives the denial as the tool's result and falls back to web search.
-   The workflow itself, not the model, prefixes the answer with a bold notice
-   that Keycard policy denied knowledge-base access and everything below is
-   web-sourced, adds a "Knowledge base access denied by Keycard policy" step to
-   the progress feed, and returns the denial text under `denials` in the API
-   response. The OpenAI key is untouched, so the agent stays articulate; only
-   retrieval is gone. Restore and ask a third time:
-
-   ```bash
-   uv run python -m infra.demo_policy restore
-   ```
+   The workflow itself, not the model, records the refusal: the progress feed
+   shows a red "Knowledge base access denied by Keycard policy" step, the
+   answer carries a red callout with the zone's denial text, and the API
+   response lists it under `denials`. The OpenAI key is untouched, so the agent
+   stays articulate; only retrieval is gone. Flip the switch back to Allowed
+   (or `uv run python -m infra.demo_policy restore`) and ask a third time.
 
    Grounded citations return on the very next mint. No worker restart and no
    cache to flush: every tool call mints its own credential, so a policy change

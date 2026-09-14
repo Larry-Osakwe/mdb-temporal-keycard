@@ -173,17 +173,10 @@ class DeepResearchAgent:
         except Exception:  # noqa: BLE001 - trajectory is diagnostic only
             self._tool_calls = []
 
-        answer = result.final_output
-        if self._denials:
-            # Stated by the workflow, not the model, so the record is exact even
-            # when the model glosses over the refusal or finds the same material
-            # on the open web.
-            answer = (
-                f"**Keycard policy denied this agent's knowledge-base access** "
-                f"({len(self._denials)} tool call(s) refused: {self._denials[0]}). "
-                "Everything below is web-sourced.\n\n" + answer
-            )
-        self._answer = answer
+        # Denials are reported in `denials` (progress query and result), recorded by
+        # the workflow rather than the model, so the record is exact even when the
+        # model glosses over the refusal or finds the same material on the open web.
+        self._answer = result.final_output
         self._done = True
         self._add_final_step()
         return {
