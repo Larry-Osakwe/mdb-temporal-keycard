@@ -167,9 +167,16 @@ demo-start: install ## Start the Keycard demo stack in the background (no Docker
 		npm --prefix agent/ui install; \
 	fi
 	@$(MAKE) -s _bg NAME=agent-ui CMD="npm --prefix agent/ui run dev -- --host 0.0.0.0"
-	@for i in $$(seq 1 90); do curl -sf http://localhost:$$(grep -E '^AGENT_API_PORT=' .env | cut -d= -f2 | grep . || echo 8090)/health >/dev/null 2>&1 && break; sleep 1; done
+	@for i in $$(seq 1 60); do curl -sf http://localhost:8090/health >/dev/null 2>&1 && break; sleep 1; done
+	@for i in $$(seq 1 30); do bash -c 'exec 3<>/dev/tcp/127.0.0.1/5173' 2>/dev/null && break; sleep 1; done
 	@echo
-	@echo "demo stack up. Agent UI: http://localhost:5173 | Temporal UI: http://localhost:8233 | Agent API: http://localhost:8090/health"
+	@echo "demo stack status:"
+	@bash -c 'exec 3<>/dev/tcp/127.0.0.1/7233' 2>/dev/null && echo "  temporal   OK   http://localhost:8233" || echo "  temporal   FAIL see $(LOGDIR)/temporal.log"
+	@grep -q "connected to" $(LOGDIR)/worker.log 2>/dev/null && echo "  worker     OK   Keycard mode" || echo "  worker     FAIL see $(LOGDIR)/worker.log"
+	@curl -sf http://localhost:8090/health >/dev/null 2>&1 && echo "  agent-api  OK   http://localhost:8090/health" || echo "  agent-api  FAIL see $(LOGDIR)/agent-api.log"
+	@bash -c 'exec 3<>/dev/tcp/127.0.0.1/5173' 2>/dev/null && echo "  agent-ui   OK   http://localhost:5173" || echo "  agent-ui   FAIL see $(LOGDIR)/agent-ui.log"
+	@curl -sf http://localhost:8090/keycard/access >/dev/null 2>&1 && echo "  switch     OK   Keycard CLI session reachable" || echo "  switch     FAIL run: keycard auth signin --zone <zone-id> --org <org-id>, then make demo-stop && make demo-start"
+	@echo
 	@echo "logs: 'make app-logs'   stop: 'make demo-stop'"
 
 .PHONY: demo-stop

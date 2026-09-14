@@ -87,8 +87,9 @@ agent UI in the background, without Docker or MinIO. The worker starts
 before the API on purpose: the API runs an index bootstrap workflow at
 startup and waits for a worker to take it.
 
-Check: the command ends with `worker: Keycard mode confirmed` and a line of
-URLs. `curl -s localhost:8090/health` returns `{"ok":true,...}`, and
+Check: the command ends with a status block reading `OK` on all five lines
+(temporal, worker, agent-api, agent-ui, switch). A `FAIL` line names the log
+to read. `curl -s localhost:8090/health` returns `{"ok":true,...}`, and
 
 ```bash
 curl -s localhost:8090/keycard/access
@@ -138,7 +139,7 @@ The full on-stage script, including the worker-kill and rotation beats, is in
 | --- | --- | --- |
 | `demo-start` stops at "worker did not connect" | Temporal not up, or `uv sync` incomplete | `tail .local/worker.log`; run `temporal server start-dev` by hand to see the error |
 | Worker log says `CredentialDiscoveryError` or the switch 502s | `.env` missing `KEYCARD_*` lines, or CLI not signed in | Redo step 4, then `keycard auth signin` and `make demo-stop && make demo-start` |
-| Answer with access has no `s3://` citations | Atlas network access list blocks your IP | Ask the cluster owner to allow your IP (or the venue's); the vaulted URI is fine |
+| Answer with access has no `s3://` citations, or the `bootstrap-indexes` workflow in the Temporal UI keeps retrying with a Mongo connection error | Atlas network access list blocks your IP | Ask the cluster owner to allow your IP (or the venue's); the vaulted URI is fine |
 | `KeycardAccessDenied` while the switch says Allowed | Policy set out of sync | `uv run python -m infra.demo_policy status`, then `restore` |
 | Agent says "Research agent unavailable" | Worker not in Keycard mode and no `OPENAI_API_KEY` | Check `KEYCARD_ZONE_URL` in `.env`, restart |
 | The switch is missing from the page | Agent API not in Keycard mode, or UI can't reach :8090 | `curl localhost:8090/keycard/access`; check `.local/agent-api.log` |

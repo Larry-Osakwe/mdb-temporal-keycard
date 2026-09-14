@@ -43,23 +43,31 @@ app.add_middleware(
 )
 
 
+async def _bootstrap_indexes_via_workflow() -> None:
+    # In Keycard mode the bootstrap runs as a workflow, so the Mongo
+    # credential is minted per activity execution like everything else.
+    try:
+        client = await _get_agent_client()
+        result = await client.execute_workflow(
+            "BootstrapIndexesWorkflow",
+            id="bootstrap-indexes",
+            task_queue=settings.temporal_task_queue,
+        )
+        logger.info("Bootstrap workflow completed: %s", result)
+    except Exception:
+        logger.exception("Bootstrap workflow failed")
+
+
 @app.on_event("startup")
 async def ensure_index_on_startup() -> None:
     from pipeline.clients import keycard_enabled
 
     if keycard_enabled():
-        # In Keycard mode the bootstrap runs as a workflow, so the Mongo
-        # credential is minted per activity execution like everything else.
-        try:
-            client = await _get_agent_client()
-            result = await client.execute_workflow(
-                "BootstrapIndexesWorkflow",
-                id="bootstrap-indexes",
-                task_queue=settings.temporal_task_queue,
-            )
-            logger.info("Bootstrap workflow completed: %s", result)
-        except Exception:
-            logger.exception("Bootstrap workflow failed at startup")
+        # Run in the background so /health and /research answer at once. The
+        # bootstrap needs a worker and a reachable Atlas cluster; if either is
+        # missing the workflow keeps retrying in Temporal without holding the
+        # API hostage, and the outcome lands in this log.
+        asyncio.create_task(_bootstrap_indexes_via_workflow())
         return
     try:
         boot = ensure_collections_and_indexes()
