@@ -65,6 +65,12 @@ questions from content that was ingested through Keycard-minted credentials.
 Windows to have open: the agent UI (http://localhost:5173), the Temporal UI
 (http://localhost:8233), and the Keycard console on the zone's audit log.
 
+Before the demo, delete the `MONGODB_URI` line from `.env`. In Keycard mode
+nothing on the demo path reads it (index creation routes through the bootstrap
+workflow), and its absence makes the point literal: no database credential
+lives on this machine. `make query` and other out-of-band scripts need it
+back afterwards.
+
 1. **Start a research query.** Use the agent UI, or:
 
    ```bash
@@ -101,6 +107,57 @@ Windows to have open: the agent UI (http://localhost:5173), the Temporal UI
    Temporal UI, walk the workflow history: inputs and results only, nothing
    credential-shaped. In the Keycard console, the audit log shows every mint
    attributed to `temporal-pipeline-worker`.
+
+5. **Revoke the agent's database access by policy, then ask again.** This
+   beat is about the agent's behavior, not the pipeline. Pick a question only
+   the knowledge base can answer: the seeded `awesome-temporal.md` is also
+   public on GitHub, so web search partly recovers it once access is denied
+   and the contrast softens. Seeding one internal-looking document (a
+   fictional runbook or design note) and asking about it makes the denied
+   answer visibly empty-handed. Note the knowledge-base `source_uri` citations
+   in the first answer:
+
+   ```bash
+   curl -s -X POST http://localhost:8090/research \
+     -H 'Content-Type: application/json' \
+     -d '{"query":"How do activity heartbeats work in Temporal?"}'
+   curl -s http://localhost:8090/research/<workflow_id>   # poll until done
+   ```
+
+   Remove the MongoDB resource from the worker application's dependencies. In
+   Keycard's model that is the policy statement "this application may not be
+   issued this credential":
+
+   ```bash
+   uv run python -m infra.demo_policy deny
+   ```
+
+   Ask the same question. `vector_search_tool` fails on its first attempt with
+   `KeycardAccessDenied` naming the resource (open the agent workflow in the
+   Temporal UI to show it; the zone's own message reads `Application
+   "temporal-pipeline-worker" is not allowed to access "MongoDB Atlas"`). The
+   agent receives the denial as the tool's result and falls back to web search.
+   The workflow itself, not the model, prefixes the answer with a bold notice
+   that Keycard policy denied knowledge-base access and everything below is
+   web-sourced, adds a "Knowledge base access denied by Keycard policy" step to
+   the progress feed, and returns the denial text under `denials` in the API
+   response. The OpenAI key is untouched, so the agent stays articulate; only
+   retrieval is gone. Restore and ask a third time:
+
+   ```bash
+   uv run python -m infra.demo_policy restore
+   ```
+
+   Grounded citations return on the very next mint. No worker restart and no
+   cache to flush: every tool call mints its own credential, so a policy change
+   lands on the next call in either direction. The Keycard audit log shows the
+   denied and the allowed mints side by side, both attributed to
+   `temporal-pipeline-worker`.
+
+   Target MongoDB for this beat rather than OpenAI: the OpenAI key sits behind
+   the model provider's five-minute refresh window, while Atlas mints per tool
+   call, so the Atlas denial lands in seconds. `infra.demo_policy` takes
+   `--resource <identifier>` if you want to show the OpenAI case anyway.
 
 ## What to point at while it runs
 
