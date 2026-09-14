@@ -142,6 +142,43 @@ start: install .env infra-up ## Start everything in the background (NO_WORKER=1 
 	@echo "next: 'make index' (once) ; 'make seed'"
 	@echo "logs: 'make app-logs'   stop: 'make stop'"
 
+# Keycard demo path: Temporal dev server + worker + agent API + agent UI. No Docker,
+# no MinIO, no trigger API; ingestion already happened and the corpus lives in the
+# vaulted Atlas cluster. The worker starts before the agent API on purpose: the API
+# runs the index bootstrap workflow at startup and waits for a worker to pick it up.
+.PHONY: demo-start
+demo-start: install ## Start the Keycard demo stack in the background (no Docker needed)
+	@mkdir -p $(LOGDIR)
+	@grep -q '^KEYCARD_ZONE_URL=' .env 2>/dev/null || { echo "KEYCARD_ZONE_URL missing from .env; run: uv run python -m infra.provision_keycard"; exit 1; }
+	@if bash -c 'exec 3<>/dev/tcp/127.0.0.1/7233' 2>/dev/null; then \
+		echo "temporal: already running on :7233, reusing it"; \
+	else \
+		echo "temporal: starting dev server (logs -> $(LOGDIR)/temporal.log)"; \
+		nohup temporal server start-dev > $(LOGDIR)/temporal.log 2>&1 & echo $$! > $(LOGDIR)/temporal.pid; \
+		until bash -c 'exec 3<>/dev/tcp/127.0.0.1/7233' 2>/dev/null; do sleep 0.5; done; \
+	fi
+	@$(MAKE) -s _bg NAME=worker CMD="$(PY) -u -m pipeline.worker"
+	@for i in $$(seq 1 60); do grep -q "connected to" $(LOGDIR)/worker.log 2>/dev/null && break; sleep 1; done
+	@grep -q "connected to" $(LOGDIR)/worker.log || { echo "worker did not connect; see $(LOGDIR)/worker.log"; exit 1; }
+	@grep -q "Keycard mode" $(LOGDIR)/worker.log && echo "worker: Keycard mode confirmed" || echo "WARN: worker is not in Keycard mode (check .env)"
+	@$(MAKE) -s _bg NAME=agent-api CMD="$(PY) -u -m agent.api"
+	@if [ ! -d agent/ui/node_modules ]; then \
+		echo "agent-ui: installing npm dependencies"; \
+		npm --prefix agent/ui install; \
+	fi
+	@$(MAKE) -s _bg NAME=agent-ui CMD="npm --prefix agent/ui run dev -- --host 0.0.0.0"
+	@for i in $$(seq 1 90); do curl -sf http://localhost:$$(grep -E '^AGENT_API_PORT=' .env | cut -d= -f2 | grep . || echo 8090)/health >/dev/null 2>&1 && break; sleep 1; done
+	@echo
+	@echo "demo stack up. Agent UI: http://localhost:5173 | Temporal UI: http://localhost:8233 | Agent API: http://localhost:8090/health"
+	@echo "logs: 'make app-logs'   stop: 'make demo-stop'"
+
+.PHONY: demo-stop
+demo-stop: stop-app ## Stop the Keycard demo stack (app processes + Temporal dev server)
+	@-if [ -f $(LOGDIR)/temporal.pid ]; then \
+		kill $$(cat $(LOGDIR)/temporal.pid) 2>/dev/null && echo "stopped temporal" || true; \
+		rm -f $(LOGDIR)/temporal.pid; \
+	fi
+
 # Internal: background a process with a pidfile + unbuffered logs.
 .PHONY: _bg
 _bg:
