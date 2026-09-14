@@ -126,10 +126,27 @@ export default function App() {
           <div className="keycard-text">
             <span className="keycard-label">Keycard policy</span>
             <span className="keycard-desc">
-              <code>{access.application}</code>{" "}
-              {access.allowed === false ? "may not be issued" : "may be issued"} the{" "}
-              <code>{access.resource}</code> credential
+              {access.policy ? (
+                <>
+                  <code>{access.policy}</code>{" "}
+                  {access.allowed === false ? "is active: " : "is inactive: "}
+                  <code>{access.application}</code>{" "}
+                  {access.allowed === false ? "is forbidden" : "may be issued"} the{" "}
+                  <code>{access.resource}</code> credential
+                </>
+              ) : (
+                <>
+                  <code>{access.application}</code>{" "}
+                  {access.allowed === false ? "may not be issued" : "may be issued"} the{" "}
+                  <code>{access.resource}</code> credential
+                </>
+              )}
             </span>
+            {access.policy_set && (
+              <span className="keycard-sub">
+                active policy set <code>{access.policy_set}</code> v{access.policy_set_version}
+              </span>
+            )}
             {accessError && <span className="keycard-error">{accessError}</span>}
           </div>
           <button
@@ -139,11 +156,11 @@ export default function App() {
             aria-checked={access.allowed !== false}
             disabled={accessBusy}
             onClick={toggleAccess}
-            title="Flip the worker application's dependency on the Atlas resource, live"
+            title="Activate or deactivate the forbid policy for the worker application, live"
           >
             <span className="knob" />
             <span className="switch-label">
-              {accessBusy ? "Updating…" : access.allowed === false ? "Denied" : "Allowed"}
+              {accessBusy ? "Updating…" : access.allowed === false ? "Forbidden" : "Allowed"}
             </span>
           </button>
         </div>

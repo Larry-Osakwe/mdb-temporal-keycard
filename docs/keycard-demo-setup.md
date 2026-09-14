@@ -94,8 +94,14 @@ URLs. `curl -s localhost:8090/health` returns `{"ok":true,...}`, and
 curl -s localhost:8090/keycard/access
 ```
 
-returns `"allowed":true` with the application and resource ids. If it
-returns a 502, the CLI session from step 3 is not usable from this shell.
+returns `"allowed":true`, `"policy":"forbid-agent-atlas"`, and the name and
+version of the policy set that is active right now. If it returns a 502, the
+CLI session from step 3 is not usable from this shell.
+
+The policy objects behind the switch (the `forbid-agent-atlas` policy and the
+`demo-zone-policies` set with a baseline version and a forbid version) live
+in the zone and already exist; the API reuses them. `uv run python -m
+infra.demo_policy status` prints the same state from the terminal.
 
 Logs: `make app-logs`. Stop everything: `make demo-stop`.
 
@@ -108,11 +114,14 @@ bar and reads Allowed.
    podcasts are listed for Temporal?` Expect knowledge-base citations
    (`s3://temporal-datasources/...`) and a trajectory of two searches and
    two reranks.
-2. Flip the switch to Denied. It turns red within a second or two.
+2. Flip the switch to Forbidden. It turns red within a second or two; that
+   activated the policy set version carrying `forbid-agent-atlas`. The
+   application's dependency on Atlas is untouched.
 3. Ask the same question. Expect one "Searching the docs…" step, then a red
    "Knowledge base access denied by Keycard policy" step, a red callout with
-   the zone's message (`Application "temporal-pipeline-worker" is not allowed
-   to access "MongoDB Atlas"`), and a web-only answer.
+   the zone's message (`Access to "MongoDB Atlas" is denied by Policy
+   "forbid-agent-atlas" in version <n> of Policy Set "demo-zone-policies"`), and
+   a web-only answer.
 4. Flip back to Allowed and ask again. Citations return, nothing restarted.
 
 Also open http://localhost:8233 (each answer links its workflow run; the
@@ -130,6 +139,6 @@ The full on-stage script, including the worker-kill and rotation beats, is in
 | `demo-start` stops at "worker did not connect" | Temporal not up, or `uv sync` incomplete | `tail .local/worker.log`; run `temporal server start-dev` by hand to see the error |
 | Worker log says `CredentialDiscoveryError` or the switch 502s | `.env` missing `KEYCARD_*` lines, or CLI not signed in | Redo step 4, then `keycard auth signin` and `make demo-stop && make demo-start` |
 | Answer with access has no `s3://` citations | Atlas network access list blocks your IP | Ask the cluster owner to allow your IP (or the venue's); the vaulted URI is fine |
-| `KeycardAccessDenied` while the switch says Allowed | Dependency out of sync | `uv run python -m infra.demo_policy status`, then `restore` |
+| `KeycardAccessDenied` while the switch says Allowed | Policy set out of sync | `uv run python -m infra.demo_policy status`, then `restore` |
 | Agent says "Research agent unavailable" | Worker not in Keycard mode and no `OPENAI_API_KEY` | Check `KEYCARD_ZONE_URL` in `.env`, restart |
 | The switch is missing from the page | Agent API not in Keycard mode, or UI can't reach :8090 | `curl localhost:8090/keycard/access`; check `.local/agent-api.log` |

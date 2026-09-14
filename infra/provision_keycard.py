@@ -37,7 +37,7 @@ from pathlib import Path
 ZONE_ID = os.environ.get("KEYCARD_PROVISION_ZONE_ID", "bsq01zgq46reqv1l2fj7hgjhgt")
 ORG_ID = os.environ.get("KEYCARD_PROVISION_ORG_ID", "m4pm31dpupr5y8lm99n90n2xv9")
 APP_NAME = os.environ.get("KEYCARD_PROVISION_APP_NAME", "temporal-pipeline-worker")
-CLI_TIMEOUT_SECONDS = int(os.environ.get("KEYCARD_CLI_TIMEOUT", "30"))
+CLI_TIMEOUT_SECONDS = int(os.environ.get("KEYCARD_CLI_TIMEOUT", "15"))
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 RESOURCES = [
@@ -52,11 +52,17 @@ def api(method: str, path: str, body: dict | None = None) -> dict:
     cmd = ["keycard", "agent", "api", path, "-X", method, "--zone", ZONE_ID, "--org", ORG_ID]
     if body is not None:
         cmd += ["-d", json.dumps(body)]
-    try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=CLI_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
-        return {"_failed": True, "cli_error": f"keycard agent api did not answer within {CLI_TIMEOUT_SECONDS}s; "
-                                              "check network and `keycard auth whoami`"}
+    # The CLI has been seen to stall on a first call and answer the retry at
+    # once, so one retry is cheap insurance for a live demo.
+    for attempt in range(2):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=CLI_TIMEOUT_SECONDS)
+            break
+        except subprocess.TimeoutExpired:
+            if attempt == 1:
+                return {"_failed": True,
+                        "cli_error": f"keycard agent api did not answer within {CLI_TIMEOUT_SECONDS}s twice; "
+                                     "check network and `keycard auth whoami --zone <zone-id>`"}
     text = out.stdout.strip()
     try:
         payload = json.loads(text) if text else {}

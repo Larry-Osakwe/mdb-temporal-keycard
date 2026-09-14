@@ -36,6 +36,11 @@ MONGODB_URI='mongodb+srv://...' VOYAGE_API_KEY='...' OPENAI_API_KEY='...' \
 # 2. Local infra defaults (MinIO + Temporal are local; no Temporal account)
 cat .env.example | grep -A4 "S3_ENDPOINT_URL" >> .env   # or copy the S3/MinIO block by hand
 
+# 2b. Create the demo policy set for the on-stage policy beat (idempotent):
+#     the forbid-agent-atlas policy and demo-zone-policies with two versions.
+#     Nothing is activated; the switch on the agent page does that.
+uv run python -m infra.demo_policy setup
+
 # 3. Bring everything up, create the vector index, seed the corpus
 make setup
 make start          # MinIO, Temporal dev server, worker, trigger API, agent API + UI
@@ -129,21 +134,32 @@ back afterwards.
    ```
 
    Flip the **Keycard policy** switch at the top of the agent page from
-   Allowed to Denied. That removes the MongoDB resource from the worker
-   application's dependencies, which in Keycard's model is the policy
-   statement "this application may not be issued this credential". The switch
-   calls `POST /keycard/access` on the agent API, which runs the same code as
-   the terminal fallback:
+   Allowed to Forbidden. That activates the version of the customer policy set
+   `demo-zone-policies` that carries the managed defaults plus one policy:
+
+   ```cedar
+   @id("forbid-agent-atlas")
+   forbid (principal is Keycard::Application, action, resource is Keycard::Resource)
+   when { principal.identifier == "temporal-pipeline-worker" &&
+          resource.identifier == "https://cluster.mongodb.net" };
+   ```
+
+   The worker application keeps its dependency on Atlas the whole time, so
+   this is policy overriding an entitlement the agent still has, not
+   de-provisioning. Cedar forbids win over permits; activation is atomic and
+   the worker's next mint sees it. The switch calls `POST /keycard/access` on
+   the agent API, which runs the same code as the terminal fallback:
 
    ```bash
    uv run python -m infra.demo_policy deny
    ```
 
    Ask the same question. `vector_search_tool` fails on its first attempt with
-   `KeycardAccessDenied` naming the resource (open the agent workflow in the
-   Temporal UI to show it; the zone's own message reads `Application
-   "temporal-pipeline-worker" is not allowed to access "MongoDB Atlas"`). The
-   agent receives the denial as the tool's result and falls back to web search.
+   `KeycardAccessDenied` (open the agent workflow in the Temporal UI to show
+   it). The zone's own message names the policy: `Access to "MongoDB Atlas" is
+   denied by Policy "forbid-agent-atlas" in version <n> of Policy Set
+   "demo-zone-policies"`. The agent receives the denial as the tool's result
+   and falls back to web search.
    The workflow itself, not the model, records the refusal: the progress feed
    shows a red "Knowledge base access denied by Keycard policy" step, the
    answer carries a red callout with the zone's denial text, and the API
@@ -153,9 +169,15 @@ back afterwards.
 
    Grounded citations return on the very next mint. No worker restart and no
    cache to flush: every tool call mints its own credential, so a policy change
-   lands on the next call in either direction. The Keycard audit log shows the
-   denied and the allowed mints side by side, both attributed to
-   `temporal-pipeline-worker`.
+   lands on the next call in either direction.
+
+   Then go into the Keycard console and show the machinery: **Policy sets**
+   has `demo-zone-policies` active with its two live versions (the baseline
+   and the one with the forbid); **All policies** lists `forbid-agent-atlas` as a customer
+   policy next to the three platform defaults, and opening it shows the Cedar
+   above; **Activity** shows the Deny and the Allow decisions side by side,
+   both attributed to `temporal-pipeline-worker`, the Deny naming the policy.
+   The application's Dependencies tab still lists Atlas throughout.
 
    Target MongoDB for this beat rather than OpenAI: the OpenAI key sits behind
    the model provider's five-minute refresh window, while Atlas mints per tool

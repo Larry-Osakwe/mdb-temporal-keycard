@@ -2,8 +2,8 @@
 
   POST /research            {query}      -> {workflow_id}            (start durable research agent)
   GET  /research/{wf_id}                 -> {steps[], answer, done…} (poll live progress)
-  GET  /keycard/access                   -> {allowed, resource, …}   (may the worker mint the Atlas credential?)
-  POST /keycard/access      {allowed}    -> {allowed, resource, …}   (flip it: deny or restore, live)
+  GET  /keycard/access                   -> {allowed, policy, …}     (is the forbid policy active?)
+  POST /keycard/access      {allowed}    -> {allowed, policy, …}     (activate or deactivate it, live)
   GET  /health
 
 Run:  uv run python -m agent.api
@@ -80,6 +80,7 @@ async def ensure_index_on_startup() -> None:
 class AccessRequest(BaseModel):
     allowed: bool
     resource: str | None = None
+    mode: str = "policy"
 
 
 def _require_keycard_mode() -> None:
@@ -96,8 +97,8 @@ def _require_keycard_mode() -> None:
 async def keycard_access() -> dict:
     """Whether Keycard currently lets the worker application mint the Atlas credential.
 
-    Backed by the application's dependency on the resource; read through the
-    signed-in Keycard CLI, same as infra/demo_policy.py."""
+    Reads which demo policy set version is active (baseline, or the one carrying
+    the forbid policy) through the signed-in Keycard CLI, same as infra/demo_policy.py."""
     _require_keycard_mode()
     try:
         return await asyncio.to_thread(demo_policy.access_state, settings.keycard_mongodb_resource)
@@ -107,12 +108,12 @@ async def keycard_access() -> dict:
 
 @app.post("/keycard/access")
 async def keycard_set_access(req: AccessRequest) -> dict:
-    """Deny (allowed=false) or restore (allowed=true) the worker's access, effective on its
-    next mint. The agent UI's Keycard switch calls this."""
+    """Activate the forbid policy (allowed=false) or the baseline (allowed=true), effective on
+    the worker's next mint. The agent UI's Keycard switch calls this."""
     _require_keycard_mode()
     resource = req.resource or settings.keycard_mongodb_resource
     try:
-        state = await asyncio.to_thread(demo_policy.set_access, resource, req.allowed)
+        state = await asyncio.to_thread(demo_policy.set_access, resource, req.allowed, req.mode)
     except (LookupError, demo_policy.PolicyError) as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     logger.info("Keycard access for %s set to %s", resource, "allowed" if req.allowed else "denied")

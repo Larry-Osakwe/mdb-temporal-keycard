@@ -17,6 +17,12 @@ export interface ProgressResponse {
 export interface AccessState {
   application: string;
   resource: string;
-  /** null when the zone did not report the dependency list. */
+  /** "policy": a forbid policy is toggled; "dependency": the app's dependency list is edited. */
+  mechanism?: "policy" | "dependency";
+  /** Name of the forbid policy when mechanism is "policy". */
+  policy?: string;
+  policy_set?: string | null;
+  policy_set_version?: number | null;
+  /** null when the zone did not report the state. */
   allowed: boolean | null;
 }
